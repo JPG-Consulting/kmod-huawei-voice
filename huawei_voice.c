@@ -1,10 +1,34 @@
 /*
   USB Driver for GSM modems
 
-  
+  Copyright (C) 2005  Matthias Urlichs <smurf@smurf.noris.de>
+
+  This driver is free software; you can redistribute it and/or modify
+  it under the terms of Version 2 of the GNU General Public License as
+  published by the Free Software Foundation.
+
+  Portions copied from the Keyspan driver by Hugh Blemings <hugh@blemings.org>
+
+  History: see the git log.
+
+  Work sponsored by: Sigos GmbH, Germany <info@sigos.de>
+
+  This driver exists because the "normal" serial driver doesn't work too well
+  with GSM modems. Issues:
+  - data loss -- one single Receive URB is not nearly enough
+  - nonstandard flow (Option devices) control
+  - controlling the baud rate doesn't make sense
+
+  This driver is named "option" because the most common device it's
+  used for is a PC-Card (with an internal OHCI-USB interface, behind
+  which the GSM interface sits), made by Option Inc.
+
+  Some of the "one port" devices actually exhibit multiple USB instances
+  on the USB bus. This is not a bug, these ports are used for different
+  device features.
 */
 
-#define DRIVER_AUTHOR "Juan Pedro Gonzalez"
+#define DRIVER_AUTHOR "Matthias Urlichs <smurf@smurf.noris.de>"
 #define DRIVER_DESC "USB Driver for GSM modems"
 
 #include <linux/kernel.h>
@@ -17,7 +41,7 @@
 #include <linux/bitops.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
-#include "usb-wwan.h" // Included in original kmod-huawei-voice
+#include "usb-wwan.h"
 
 /* Function prototypes */
 static int  huawei_voice_probe(struct usb_serial *serial,
@@ -26,14 +50,12 @@ static int huawei_voice_attach(struct usb_serial *serial);
 static void huawei_voice_release(struct usb_serial *serial);
 static int huawei_voice_send_setup(struct usb_serial_port *port);
 static void huawei_voice_instat_callback(struct urb *urb);
-// Added by kmod-huawei-voice
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
-                   const unsigned char *buf, int count);
-
+		   const unsigned char *buf, int count);
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
-#define HUAWEI_PRODUCT_E600			0x1001
+#define HUAWEI_PRODUCT_E620			0x1001
 
 /* some devices interfaces need special handling due to a number of reasons */
 enum huawei_voice_blacklist_reason {
@@ -54,14 +76,10 @@ static const struct huawei_voice_blacklist_info four_g_w14_blacklist = {
 	.sendsetup = BIT(0) | BIT(1),
 };
 
-static const struct huawei_voice_blacklist_info huawei_cdc12_blacklist = {
-	.reserved = BIT(1) | BIT(2),
-};
-
 static const struct usb_device_id huawei_voice_ids[] = {
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E600, 0xff, 0xff, 0xff) },
-	{ }  /* Terminating entry */
-}
+	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E620, 0xff, 0xff, 0xff) },
+	{ } /* Terminating entry */
+};
 MODULE_DEVICE_TABLE(usb, huawei_voice_ids);
 
 /* The card has three separate interfaces, which the serial driver
@@ -73,13 +91,13 @@ static struct usb_serial_driver huawei_voice_1port_device = {
 		.owner =	THIS_MODULE,
 		.name =		"huawei_voice1",
 	},
-	.description       = "Huawei 3G modem diag(voice) port",
+	.description       = "Huawei GSM modem (1-port)",
 	.id_table          = huawei_voice_ids,
 	.num_ports         = 1,
 	.probe             = huawei_voice_probe,
 	.open              = usb_wwan_open,
 	.close             = usb_wwan_close,
-	.dtr_rts           = usb_wwan_dtr_rts,
+	.dtr_rts	       = usb_wwan_dtr_rts,
 	.write             = huawei_voice_write,
 	.write_room        = usb_wwan_write_room,
 	.chars_in_buffer   = usb_wwan_chars_in_buffer,
@@ -128,6 +146,7 @@ struct huawei_voice_port_private {
 	unsigned long tx_start_time[N_OUT_URB + 1];
 };
 
+
 static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason reason,
 			   const struct huawei_voice_blacklist_info *blacklist)
 {
@@ -159,6 +178,9 @@ static int huawei_voice_probe(struct usb_serial *serial,
 				&serial->interface->cur_altsetting->desc;
 	struct usb_device_descriptor *dev_desc = &serial->dev->descriptor;
 
+	__u8 nintf;
+	__u8 ifnum;
+	
 	/* Never bind to the CD-Rom emulation interface	*/
 	if (iface_desc->bInterfaceClass == 0x08)
 		return -ENODEV;
@@ -173,20 +195,21 @@ static int huawei_voice_probe(struct usb_serial *serial,
 		OPTION_BLACKLIST_RESERVED_IF,
 		(const struct huawei_voice_blacklist_info *) id->driver_info))
 		return -ENODEV;
+
 	/*
-	 * Don't bind network interface on Samsung GT-B3730, it is handled by
+	 * Don't bind network interface on Huawei E620, it is handled by
 	 * a separate module.
 	 */
-	if (dev_desc->idVendor == cpu_to_le16(SAMSUNG_VENDOR_ID) &&
-	    dev_desc->idProduct == cpu_to_le16(SAMSUNG_PRODUCT_GT_B3730) &&
-	    iface_desc->bInterfaceClass != USB_CLASS_CDC_DATA)
-		return -ENODEV;
+	if (dev_desc->idVendor == cpu_to_le16(HUAWEI_VENDOR_ID) &&
+	    dev_desc->idProduct == cpu_to_le16(HUAWEI_PRODUCT_E620) &&
+	    serial->interface->cur_altsetting->desc.bInterfaceNumber != 1)
+		return -ENODEV;	
 
-	if(dev_desc->idVendor == cpu_to_le16(HUAWEI_VENDOR_ID) &&
-	   dev_desc->idProduct == cpu_to_le16(HUAWEI_PRODUCT_E600) &&
-	   serial->interface->cur_altsetting->desc.bInterfaceNumber != 1)
-		return -ENODEV;
-		
+	nintf = serial->dev->actconfig->desc.bNumInterfaces;
+	dev_dbg(&serial->dev->dev, "Num Interfaces = %d\n", nintf);
+	ifnum = intf->desc.bInterfaceNumber;
+	dev_dbg(&serial->dev->dev, "This Interface = %d\n", ifnum);
+    
 	/* Store device id so we can use it during attach. */
 	usb_set_serial_data(serial, (void *)id);
 
@@ -302,7 +325,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 {
 	struct usb_serial *serial = port->serial;
 	struct usb_wwan_intf_private *intfdata = usb_get_serial_data(serial);
-	struct option_private *priv = intfdata->private;
+	struct huawei_voice_private *priv = intfdata->private;
 	struct huawei_voice_port_private *portdata;
 	int val = 0;
 	int res;
@@ -327,39 +350,42 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 	return res;
 }
 
-/* Write */
-int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
-                   const unsigned char *buf, int count)
+static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
+		   const unsigned char *buf, int count)
 {
 	struct huawei_voice_port_private *portdata;
 	struct usb_wwan_intf_private *intfdata;
-	int todo;
+	int count2;
 	struct urb *this_urb = NULL;	/* spurious */
 	int err;
 	unsigned long flags;
+
+	/* Perform write */
+	count2 = usb_wwan_write(tty, port, buf, count);
 	
 	portdata = usb_get_serial_port_data(port);
 	intfdata = usb_get_serial_data(port->serial);
-	
-	dev_dbg(&port->dev, "%s: write (%d chars)\n", __func__, count);
-	
-	todo = usb_wwan_write(tty, port, buf, count);
-	
-	dev_dbg(&port->dev, "%s: Write zero packet\n", __func__);
-	
-	this_urb = portdata->out_urbs[4];
+
+	this_urb = portdata->out_urbs[N_OUT_URB];
+	/*if (test_and_set_bit(i, &portdata->out_busy)) {
+		if (time_before(jiffies,
+				portdata->tx_start_time[N_OUT_URB] + 10 * HZ))
+			return count2;
+		usb_unlink_urb(this_urb);
+		return count2;
+	}*/
 	dev_dbg(&port->dev, "%s: endpoint %d buf %d\n", __func__,
-			usb_pipeendpoint(this_urb->pipe), 4);
-	
+			usb_pipeendpoint(this_urb->pipe), N_OUT_URB);
+
 	err = usb_autopm_get_interface_async(port->serial->interface);
 	if (err < 0) {
-		clear_bit(i, &portdata->out_busy);
-		return todo;
+		clear_bit(N_OUT_URB, &portdata->out_busy);
+		return count2;
 	}
-	
-	 /* send the data */
+
+	/* send the data */
 	this_urb->transfer_buffer_length = 0;
-	
+
 	spin_lock_irqsave(&intfdata->susp_lock, flags);
 	if (intfdata->suspended) {
 		usb_anchor_urb(this_urb, &portdata->delayed);
@@ -371,19 +397,20 @@ int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		if (err) {
 			dev_err(&port->dev,
 				"%s: submit urb %d failed: %d\n",
-				__func__, i, err);
-			clear_bit(4, &portdata->out_busy);
+				__func__, N_OUT_URB, err);
+			clear_bit(N_OUT_URB, &portdata->out_busy);
 			spin_lock_irqsave(&intfdata->susp_lock, flags);
 			intfdata->in_flight--;
 			spin_unlock_irqrestore(&intfdata->susp_lock,
 					       flags);
 			usb_autopm_put_interface_async(port->serial->interface);
-			return todo;
+			return count2;
 		}
 	}
-	
-	portdata->tx_start_time[4] = jiffies;
-        return todo;
+
+	portdata->tx_start_time[N_OUT_URB] = jiffies;
+
+	return count2;
 }
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
