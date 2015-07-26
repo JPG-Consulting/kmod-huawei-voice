@@ -55,7 +55,7 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
-#define HUAWEI_PRODUCT_E620			0x1001
+#define HUAWEI_PRODUCT_E600			0x1001
 
 /* some devices interfaces need special handling due to a number of reasons */
 enum huawei_voice_blacklist_reason {
@@ -77,7 +77,7 @@ static const struct huawei_voice_blacklist_info four_g_w14_blacklist = {
 };
 
 static const struct usb_device_id huawei_voice_ids[] = {
-	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E620, 0xff, 0xff, 0xff) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(HUAWEI_VENDOR_ID, HUAWEI_PRODUCT_E600, 0xff, 0xff, 0xff) },
 	{ } /* Terminating entry */
 };
 MODULE_DEVICE_TABLE(usb, huawei_voice_ids);
@@ -124,28 +124,6 @@ struct huawei_voice_private {
 };
 
 module_usb_serial_driver(serial_drivers, huawei_voice_ids);
-
-struct huawei_voice_port_private {
-	/* Input endpoints and buffer for this port */
-	struct urb *in_urbs[N_IN_URB];
-	u8 *in_buffer[N_IN_URB];
-	/* Output endpoints and buffer for this port */
-	struct urb *out_urbs[N_OUT_URB + 1];
-	u8 *out_buffer[N_OUT_URB + 1];
-	unsigned long out_busy;	/* Bit vector of URBs in use */
-	struct usb_anchor delayed;
-
-	/* Settings for the port */
-	int rts_state;		/* Handshaking pins (outputs) */
-	int dtr_state;
-	int cts_state;		/* Handshaking pins (inputs) */
-	int dsr_state;
-	int dcd_state;
-	int ri_state;
-
-	unsigned long tx_start_time[N_OUT_URB + 1];
-};
-
 
 static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason reason,
 			   const struct huawei_voice_blacklist_info *blacklist)
@@ -197,18 +175,13 @@ static int huawei_voice_probe(struct usb_serial *serial,
 		return -ENODEV;
 
 	/*
-	 * Don't bind network interface on Huawei E620, it is handled by
+	 * Don't bind network interface on Huawei E600, it is handled by
 	 * a separate module.
 	 */
-	if (dev_desc->idVendor == cpu_to_le16(HUAWEI_VENDOR_ID) &&
-	    dev_desc->idProduct == cpu_to_le16(HUAWEI_PRODUCT_E620) &&
+	/*if (dev_desc->idVendor == cpu_to_le16(HUAWEI_VENDOR_ID) &&
+	    dev_desc->idProduct == cpu_to_le16(HUAWEI_PRODUCT_E600) &&
 	    serial->interface->cur_altsetting->desc.bInterfaceNumber != 1)
-		return -ENODEV;	
-
-	nintf = serial->dev->actconfig->desc.bNumInterfaces;
-	dev_dbg(&serial->dev->dev, "Num Interfaces = %d\n", nintf);
-	ifnum = intf->desc.bInterfaceNumber;
-	dev_dbg(&serial->dev->dev, "This Interface = %d\n", ifnum);
+		return -ENODEV;	*/
     
 	/* Store device id so we can use it during attach. */
 	usb_set_serial_data(serial, (void *)id);
@@ -267,7 +240,7 @@ static void huawei_voice_instat_callback(struct urb *urb)
 	int status = urb->status;
 	struct usb_serial_port *port = urb->context;
 	struct device *dev = &port->dev;
-	struct huawei_voice_port_private *portdata =
+	struct usb_wwan_port_private *portdata =
 					usb_get_serial_port_data(port);
 
 	dev_dbg(dev, "%s: urb %p port %p has data %p\n", __func__, urb, port, portdata);
@@ -326,7 +299,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 	struct usb_serial *serial = port->serial;
 	struct usb_wwan_intf_private *intfdata = usb_get_serial_data(serial);
 	struct huawei_voice_private *priv = intfdata->private;
-	struct huawei_voice_port_private *portdata;
+	struct usb_wwan_port_private *portdata;
 	int val = 0;
 	int res;
 
@@ -353,64 +326,85 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count)
 {
-	struct huawei_voice_port_private *portdata;
+	struct usb_wwan_port_private *portdata;
 	struct usb_wwan_intf_private *intfdata;
-	int count2;
+	struct huawei_voice_private *priv;
+	int i;
+	int left, todo;
 	struct urb *this_urb = NULL;	/* spurious */
 	int err;
 	unsigned long flags;
 
-	/* Perform write */
-	count2 = usb_wwan_write(tty, port, buf, count);
-	
 	portdata = usb_get_serial_port_data(port);
 	intfdata = usb_get_serial_data(port->serial);
+	priv = intfdata->private;
 
-	this_urb = portdata->out_urbs[N_OUT_URB];
-	/*if (test_and_set_bit(i, &portdata->out_busy)) {
-		if (time_before(jiffies,
-				portdata->tx_start_time[N_OUT_URB] + 10 * HZ))
-			return count2;
-		usb_unlink_urb(this_urb);
-		return count2;
-	}*/
-	dev_dbg(&port->dev, "%s: endpoint %d buf %d\n", __func__,
-			usb_pipeendpoint(this_urb->pipe), N_OUT_URB);
+	dev_dbg(&port->dev, "%s: write (%d chars)\n", __func__, count);
 
-	err = usb_autopm_get_interface_async(port->serial->interface);
-	if (err < 0) {
-		clear_bit(N_OUT_URB, &portdata->out_busy);
-		return count2;
-	}
+	i = 0;
+	left = count;
+	for (i = 0; left > 0 && i < N_OUT_URB; i++) {
+		todo = left;
+		if (todo > OUT_BUFLEN)
+			todo = OUT_BUFLEN;
 
-	/* send the data */
-	this_urb->transfer_buffer_length = 0;
-
-	spin_lock_irqsave(&intfdata->susp_lock, flags);
-	if (intfdata->suspended) {
-		usb_anchor_urb(this_urb, &portdata->delayed);
-		spin_unlock_irqrestore(&intfdata->susp_lock, flags);
-	} else {
-		intfdata->in_flight++;
-		spin_unlock_irqrestore(&intfdata->susp_lock, flags);
-		err = usb_submit_urb(this_urb, GFP_ATOMIC);
-		if (err) {
-			dev_err(&port->dev,
-				"%s: submit urb %d failed: %d\n",
-				__func__, N_OUT_URB, err);
-			clear_bit(N_OUT_URB, &portdata->out_busy);
-			spin_lock_irqsave(&intfdata->susp_lock, flags);
-			intfdata->in_flight--;
-			spin_unlock_irqrestore(&intfdata->susp_lock,
-					       flags);
-			usb_autopm_put_interface_async(port->serial->interface);
-			return count2;
+		this_urb = portdata->out_urbs[i];
+		if (test_and_set_bit(i, &portdata->out_busy)) {
+			if (time_before(jiffies,
+					portdata->tx_start_time[i] + 10 * HZ))
+				continue;
+			usb_unlink_urb(this_urb);
+			continue;
 		}
+		dev_dbg(&port->dev, "%s: endpoint %d buf %d\n", __func__,
+			usb_pipeendpoint(this_urb->pipe), i);
+
+		err = usb_autopm_get_interface_async(port->serial->interface);
+		if (err < 0) {
+			clear_bit(i, &portdata->out_busy);
+			break;
+		}
+
+		/* send the data */
+		memcpy(this_urb->transfer_buffer, buf, todo);
+		this_urb->transfer_buffer_length = todo;
+
+		spin_lock_irqsave(&intfdata->susp_lock, flags);
+		if (intfdata->suspended) {
+			usb_anchor_urb(this_urb, &portdata->delayed);
+			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
+		} else {
+			intfdata->in_flight++;
+			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
+			err = usb_submit_urb(this_urb, GFP_ATOMIC);
+			if (err) {
+				dev_err(&port->dev,
+					"%s: submit urb %d failed: %d\n",
+					__func__, i, err);
+				clear_bit(i, &portdata->out_busy);
+				spin_lock_irqsave(&intfdata->susp_lock, flags);
+				intfdata->in_flight--;
+				spin_unlock_irqrestore(&intfdata->susp_lock,
+						       flags);
+				usb_autopm_put_interface_async(port->serial->interface);
+				break;
+			}
+		}
+
+		portdata->tx_start_time[i] = jiffies;
+		buf += todo;
+		left -= todo;
 	}
 
-	portdata->tx_start_time[N_OUT_URB] = jiffies;
+	count -= left;
+	dev_dbg(&port->dev, "%s: wrote (did %d)\n", __func__, count);
 
-	return count2;
+	/* E150 require write zero length frame after each 320 bytes 20ms of voice data written. */
+	if (priv->bInterfaceNumber == 1) {
+
+	}
+	
+	return count;
 }
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
