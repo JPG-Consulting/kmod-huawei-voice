@@ -52,6 +52,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port);
 static void huawei_voice_instat_callback(struct urb *urb);
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count);
+static void huawei_voice_outdat_callback(struct urb *urb);
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
@@ -169,6 +170,32 @@ static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason re
 		}
 	}
 	return false;
+}
+
+static void huawei_voice_outdat_callback(struct urb *urb)
+{
+	struct usb_serial_port *port;
+	struct huawei_voice_port_private *portdata;
+	struct usb_wwan_intf_private *intfdata;
+	int i;
+
+	port = urb->context;
+	intfdata = usb_get_serial_data(port->serial);
+
+	usb_serial_port_softint(port);
+	usb_autopm_put_interface_async(port->serial->interface);
+	portdata = usb_get_serial_port_data(port);
+	spin_lock(&intfdata->susp_lock);
+	intfdata->in_flight--;
+	spin_unlock(&intfdata->susp_lock);
+
+	for (i = 0; i < N_OUT_URB + 1; ++i) {
+		if (portdata->out_urbs[i] == urb) {
+			smp_mb__before_atomic();
+			clear_bit(i, &portdata->out_busy);
+			break;
+		}
+	}
 }
 
 static int huawei_voice_probe(struct usb_serial *serial,
