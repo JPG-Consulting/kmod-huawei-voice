@@ -135,23 +135,6 @@ struct huawei_voice_private {
 
 module_usb_serial_driver(serial_drivers, huawei_voice_ids);
 
-static void unbusy_queued_urb(struct urb *urb,
-					struct huawei_voice_port_private *portdata)
-{
-	int i;
-
-	for (i = 0; i < N_OUT_URB; i++) {
-		if (urb == portdata->out_urbs[i]) {
-			clear_bit(i, &portdata->out_busy);
-			break;
-		}
-	}
-	
-	if (urb == portdata->out_urbs[N_OUT_URB]) {
-		clear_bit(N_OUT_URB, &portdata->out_busy);
-	}
-}
-
 /* struct usb_wwan_port_private { */
 struct huawei_voice_port_private {
 	/* Input endpoints and buffer for this port */
@@ -173,6 +156,23 @@ struct huawei_voice_port_private {
 
 	unsigned long tx_start_time[N_OUT_URB + 1];
 };
+
+static void unbusy_queued_urb(struct urb *urb,
+					struct huawei_voice_port_private *portdata)
+{
+	int i;
+
+	for (i = 0; i < N_OUT_URB; i++) {
+		if (urb == portdata->out_urbs[i]) {
+			clear_bit(i, &portdata->out_busy);
+			break;
+		}
+	}
+	
+	if (urb == portdata->out_urbs[N_OUT_URB]) {
+		clear_bit(N_OUT_URB, &portdata->out_busy);
+	}
+}
 
 static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason reason,
 			   const struct huawei_voice_blacklist_info *blacklist)
