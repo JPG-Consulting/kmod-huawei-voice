@@ -267,7 +267,7 @@ static int huawei_voice_probe(struct usb_serial *serial,
 {
 	struct usb_interface_descriptor *iface_desc =
 				&serial->interface->cur_altsetting->desc;
-	struct usb_device_descriptor *dev_desc = &serial->dev->descriptor;
+	/*struct usb_device_descriptor *dev_desc = &serial->dev->descriptor;*/
 
 	/* Never bind to the CD-Rom emulation interface	*/
 	if (iface_desc->bInterfaceClass == 0x08)
