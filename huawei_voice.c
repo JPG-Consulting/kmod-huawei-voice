@@ -244,6 +244,7 @@ static int huawei_voice_attach(struct usb_serial *serial)
 	/* Added 2015-07-26 */
 	struct usb_serial_port *port;
 	struct huawei_voice_port_private *portdata;
+	struct urb *urb;
 	
 	data = kzalloc(sizeof(struct usb_wwan_intf_private), GFP_KERNEL);
 	if (!data)
@@ -274,15 +275,46 @@ static int huawei_voice_attach(struct usb_serial *serial)
 	/* Extra byte */
 	port = serial->port[0];
 	portdata = usb_get_serial_port_data(port);
-	portdata->out_urbs[4] = huawei_voice_setup_urb(serial,
-						       port->bulk_out_endpointAddress,
-					               USB_DIR_OUT,
-						       port,
-						       portdata->out_buffer[3],
-						       0,
-						       huawei_voice_outdat_callback);
+	
+	if (port->bulk_out_endpointAddress == 1) {
+		portdata->out_urbs[4] = NULL;
+	} else {
+		urb = usb_alloc_urb(0, GFP_KERNEL); /* No ISO */
+		if (urb == NULL) {
+			/* dbg("%s: alloc for endpoint %d failed.", __func__, endpoint); */
+			portdata->out_urbs[4] = NULL;
+		} else {
+			usb_fill_bulk_urb(urb, serial->dev,
+			                  usb_sndbulkpipe(serial->dev, port->bulk_out_endpointAddress) | USB_DIR_OUT,
+			                  portdata->out_buffer[3], 0, huawei_voice_outdat_callback, port);
+			portdata->out_urbs[4] = urb;
+		}
+	}
 	
 	return 0;
+}
+
+static struct urb *huawei_voice_setup_urb(struct usb_serial *serial, int endpoint,
+				      int dir, void *ctx, char *buf, int len,
+				      void (*callback) (struct urb *))
+{
+	struct urb *urb;
+
+	if (endpoint == -1)
+		return NULL;	/* endpoint not needed */
+
+	urb = usb_alloc_urb(0, GFP_KERNEL);	/* No ISO */
+	if (urb == NULL) {
+		dbg("%s: alloc for endpoint %d failed.", __func__, endpoint);
+		return NULL;
+	}
+
+	/* Fill URB using supplied data. */
+	usb_fill_bulk_urb(urb, serial->dev,
+			  usb_sndbulkpipe(serial->dev, endpoint) | dir,
+			  buf, len, callback, ctx);
+
+	return urb;
 }
 
 static void huawei_voice_release(struct usb_serial *serial)
