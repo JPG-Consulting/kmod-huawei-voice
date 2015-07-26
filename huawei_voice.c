@@ -669,7 +669,42 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 
 	/* E150 require write zero length frame after each 320 bytes 20ms of voice data written. */
 	if (priv->bInterfaceNumber == 1) {
-		
+		this_urb = portdata->out_urbs[N_OUT_URB];
+		dbg("%s: endpoint %d buf %d", __func__,
+			usb_pipeendpoint(this_urb->pipe), N_OUT_URB);
+
+		err = usb_autopm_get_interface_async(port->serial->interface);
+		if (err < 0) {
+			clear_bit(N_OUT_URB, &portdata->out_busy);
+			return count;
+		}
+
+		 /* send the data */
+		this_urb->transfer_buffer_length = 0;
+
+		spin_lock_irqsave(&intfdata->susp_lock, flags);
+		if (intfdata->suspended) {
+			usb_anchor_urb(this_urb, &portdata->delayed);
+			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
+		} else {
+			intfdata->in_flight++;
+			spin_unlock_irqrestore(&intfdata->susp_lock, flags);
+			err = usb_submit_urb(this_urb, GFP_ATOMIC);
+			if (err) {
+				dev_err(&port->dev,
+					"%s: submit urb %d failed: %d\n",
+					__func__, N_OUT_URB, err);
+				clear_bit(N_OUT_URB, &portdata->out_busy);
+				spin_lock_irqsave(&intfdata->susp_lock, flags);
+				intfdata->in_flight--;
+				spin_unlock_irqrestore(&intfdata->susp_lock,
+						       flags);
+				usb_autopm_put_interface_async(port->serial->interface);
+				return count;
+			}
+		}
+
+		portdata->tx_start_time[N_OUT_URB] = jiffies;
 	}
 	
 	return count;
