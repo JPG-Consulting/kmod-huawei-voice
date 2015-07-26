@@ -52,6 +52,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port);
 static void huawei_voice_instat_callback(struct urb *urb);
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count);
+static int huawei_voice_port_probe(struct usb_serial_port *port);
 static void huawei_voice_outdat_callback(struct urb *urb);
 static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 				      int endpoint,
@@ -111,7 +112,7 @@ static struct usb_serial_driver huawei_voice_1port_device = {
 	.ioctl             = usb_wwan_ioctl,
 	.attach            = huawei_voice_attach,
 	.release           = huawei_voice_release,
-	.port_probe        = usb_wwan_port_probe,
+	.port_probe        = huawei_voice_port_probe,
 	.port_remove	   = usb_wwan_port_remove,
 	.read_int_callback = huawei_voice_instat_callback,
 #ifdef CONFIG_PM
@@ -256,6 +257,67 @@ static int huawei_voice_probe(struct usb_serial *serial,
 	usb_set_serial_data(serial, (void *)id);
 
 	return 0;
+}
+
+static int huawei_voice_port_probe(struct usb_serial_port *port)
+{
+	struct usb_wwan_port_private *portdata;
+	struct urb *urb;
+	u8 *buffer;
+	int i;
+
+	if (!port->bulk_in_size || !port->bulk_out_size)
+		return -ENODEV;
+
+	portdata = kzalloc(sizeof(*portdata), GFP_KERNEL);
+	if (!portdata)
+		return -ENOMEM;
+
+	init_usb_anchor(&portdata->delayed);
+
+	for (i = 0; i < N_IN_URB; i++) {
+		buffer = (u8 *)__get_free_page(GFP_KERNEL);
+		if (!buffer)
+			goto bail_out_error;
+		portdata->in_buffer[i] = buffer;
+
+		urb = usb_wwan_setup_urb(port, port->bulk_in_endpointAddress,
+						USB_DIR_IN, port,
+						buffer, IN_BUFLEN,
+						usb_wwan_indat_callback);
+		portdata->in_urbs[i] = urb;
+	}
+
+	for (i = 0; i < N_OUT_URB; i++) {
+		buffer = kmalloc(OUT_BUFLEN, GFP_KERNEL);
+		if (!buffer)
+			goto bail_out_error2;
+		portdata->out_buffer[i] = buffer;
+
+		urb = usb_wwan_setup_urb(port, port->bulk_out_endpointAddress,
+						USB_DIR_OUT, port,
+						buffer, OUT_BUFLEN,
+						usb_wwan_outdat_callback);
+		portdata->out_urbs[i] = urb;
+	}
+
+	usb_set_serial_port_data(port, portdata);
+
+	return 0;
+
+bail_out_error2:
+	for (i = 0; i < N_OUT_URB; i++) {
+		usb_free_urb(portdata->out_urbs[i]);
+		kfree(portdata->out_buffer[i]);
+	}
+bail_out_error:
+	for (i = 0; i < N_IN_URB; i++) {
+		usb_free_urb(portdata->in_urbs[i]);
+		free_page((unsigned long)portdata->in_buffer[i]);
+	}
+	kfree(portdata);
+
+	return -ENOMEM;
 }
 
 static int huawei_voice_attach(struct usb_serial *serial)
