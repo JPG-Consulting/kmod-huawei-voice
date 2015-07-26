@@ -55,6 +55,10 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 static int huawei_voice_port_probe(struct usb_serial_port *port);
 static void huawei_voice_indat_callback(struct urb *urb);
 static void huawei_voice_outdat_callback(struct urb *urb);
+static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
+				      int endpoint,
+				      int dir, void *ctx, char *buf, int len,
+				      void (*callback) (struct urb *));
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
@@ -275,6 +279,25 @@ static int huawei_voice_probe(struct usb_serial *serial,
 	return 0;
 }
 
+static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
+				      int endpoint,
+				      int dir, void *ctx, char *buf, int len,
+				      void (*callback) (struct urb *))
+{
+	struct usb_serial *serial = port->serial;
+	struct urb *urb;
+
+	urb = usb_alloc_urb(0, GFP_KERNEL);	/* No ISO */
+	if (!urb)
+		return NULL;
+
+	usb_fill_bulk_urb(urb, serial->dev,
+			  usb_sndbulkpipe(serial->dev, endpoint) | dir,
+			  buf, len, callback, ctx);
+
+	return urb;
+}
+
 static int huawei_voice_port_probe(struct usb_serial_port *port)
 {
 	struct usb_wwan_port_private *portdata;
@@ -297,7 +320,7 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 			goto bail_out_error;
 		portdata->in_buffer[i] = buffer;
 
-		urb = usb_wwan_setup_urb(port, port->bulk_in_endpointAddress,
+		urb = huawei_voice__setup_urb(port, port->bulk_in_endpointAddress,
 						USB_DIR_IN, port,
 						buffer, IN_BUFLEN,
 						huawei_voice_indat_callback);
@@ -310,7 +333,7 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 			goto bail_out_error2;
 		portdata->out_buffer[i] = buffer;
 
-		urb = usb_wwan_setup_urb(port, port->bulk_out_endpointAddress,
+		urb = huawei_voice_setup_urb(port, port->bulk_out_endpointAddress,
 						USB_DIR_OUT, port,
 						buffer, OUT_BUFLEN,
 						huawei_voice_outdat_callback);
