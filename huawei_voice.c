@@ -320,7 +320,7 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 			goto bail_out_error;
 		portdata->in_buffer[i] = buffer;
 
-		urb = huawei_voice__setup_urb(port, port->bulk_in_endpointAddress,
+		urb = huawei_voice_setup_urb(port, port->bulk_in_endpointAddress,
 						USB_DIR_IN, port,
 						buffer, IN_BUFLEN,
 						huawei_voice_indat_callback);
