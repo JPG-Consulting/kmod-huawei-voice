@@ -54,10 +54,6 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 		   const unsigned char *buf, int count);
 static int huawei_voice_port_probe(struct usb_serial_port *port);
 static void huawei_voice_outdat_callback(struct urb *urb);
-static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
-				      int endpoint,
-				      int dir, void *ctx, char *buf, int len,
-				      void (*callback) (struct urb *));
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
@@ -153,25 +149,6 @@ struct huawei_voice_port_private {
 	unsigned long tx_start_time[N_OUT_URB + 1];
 };
 
-static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
-				      int endpoint,
-				      int dir, void *ctx, char *buf, int len,
-				      void (*callback) (struct urb *))
-{
-	struct usb_serial *serial = port->serial;
-	struct urb *urb;
-
-	urb = usb_alloc_urb(0, GFP_KERNEL);	/* No ISO */
-	if (!urb)
-		return NULL;
-
-	usb_fill_bulk_urb(urb, serial->dev,
-			  usb_sndbulkpipe(serial->dev, endpoint) | dir,
-			  buf, len, callback, ctx);
-
-	return urb;
-}
-
 static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason reason,
 			   const struct huawei_voice_blacklist_info *blacklist)
 {
@@ -213,7 +190,7 @@ static void huawei_voice_outdat_callback(struct urb *urb)
 	intfdata->in_flight--;
 	spin_unlock(&intfdata->susp_lock);
 
-	for (i = 0; i < N_OUT_URB + 1; ++i) {
+	for (i = 0; i < N_OUT_URB; ++i) {
 		if (portdata->out_urbs[i] == urb) {
 			smp_mb__before_atomic();
 			clear_bit(i, &portdata->out_busy);
