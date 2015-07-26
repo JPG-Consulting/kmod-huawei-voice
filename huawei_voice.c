@@ -294,29 +294,6 @@ static int huawei_voice_attach(struct usb_serial *serial)
 	return 0;
 }
 
-static struct urb *huawei_voice_setup_urb(struct usb_serial *serial, int endpoint,
-				      int dir, void *ctx, char *buf, int len,
-				      void (*callback) (struct urb *))
-{
-	struct urb *urb;
-
-	if (endpoint == -1)
-		return NULL;	/* endpoint not needed */
-
-	urb = usb_alloc_urb(0, GFP_KERNEL);	/* No ISO */
-	if (urb == NULL) {
-		dbg("%s: alloc for endpoint %d failed.", __func__, endpoint);
-		return NULL;
-	}
-
-	/* Fill URB using supplied data. */
-	usb_fill_bulk_urb(urb, serial->dev,
-			  usb_sndbulkpipe(serial->dev, endpoint) | dir,
-			  buf, len, callback, ctx);
-
-	return urb;
-}
-
 static void huawei_voice_release(struct usb_serial *serial)
 {
 	struct usb_wwan_intf_private *intfdata = usb_get_serial_data(serial);
