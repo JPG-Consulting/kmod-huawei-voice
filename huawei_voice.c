@@ -219,7 +219,7 @@ static void huawei_voice_indat_callback(struct urb *urb)
 static void huawei_voice_outdat_callback(struct urb *urb)
 {
 	struct usb_serial_port *port;
-	struct usb_wwan_port_private *portdata;
+	struct huawei_voice_port_private *portdata;
 	struct usb_wwan_intf_private *intfdata;
 	int i;
 
@@ -300,7 +300,7 @@ static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 
 static int huawei_voice_port_probe(struct usb_serial_port *port)
 {
-	struct usb_wwan_port_private *portdata;
+	struct huawei_voice_port_private *portdata;
 	struct urb *urb;
 	u8 *buffer;
 	int i;
