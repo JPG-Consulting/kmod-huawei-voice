@@ -298,7 +298,7 @@ static int huawei_voice_attach(struct usb_serial *serial)
 	port = serial->port[0];
 	portdata = usb_get_serial_port_data(port);
 	
-	portdata->out_urbs[4] = huawei_voice_setup_urb(serial,
+	portdata->out_urbs[4] = huawei_voice_setup_urb(port,
 	                                               port->bulk_out_endpointAddress,
 	                                               USB_DIR_OUT,
 	                                               port,
