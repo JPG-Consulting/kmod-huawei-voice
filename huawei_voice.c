@@ -125,6 +125,28 @@ struct huawei_voice_private {
 
 module_usb_serial_driver(serial_drivers, huawei_voice_ids);
 
+/* struct usb_wwan_port_private { */
+struct huawei_voice_port_private {
+	/* Input endpoints and buffer for this port */
+	struct urb *in_urbs[N_IN_URB];
+	u8 *in_buffer[N_IN_URB];
+	/* Output endpoints and buffer for this port */
+	struct urb *out_urbs[N_OUT_URB + 1];
+	u8 *out_buffer[N_OUT_URB + 1];
+	unsigned long out_busy;	/* Bit vector of URBs in use */
+	struct usb_anchor delayed;
+
+	/* Settings for the port */
+	int rts_state;		/* Handshaking pins (outputs) */
+	int dtr_state;
+	int cts_state;		/* Handshaking pins (inputs) */
+	int dsr_state;
+	int dcd_state;
+	int ri_state;
+
+	unsigned long tx_start_time[N_OUT_URB + 1];
+};
+
 static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason reason,
 			   const struct huawei_voice_blacklist_info *blacklist)
 {
@@ -156,9 +178,6 @@ static int huawei_voice_probe(struct usb_serial *serial,
 				&serial->interface->cur_altsetting->desc;
 	struct usb_device_descriptor *dev_desc = &serial->dev->descriptor;
 
-	__u8 nintf;
-	__u8 ifnum;
-	
 	/* Never bind to the CD-Rom emulation interface	*/
 	if (iface_desc->bInterfaceClass == 0x08)
 		return -ENODEV;
@@ -240,7 +259,7 @@ static void huawei_voice_instat_callback(struct urb *urb)
 	int status = urb->status;
 	struct usb_serial_port *port = urb->context;
 	struct device *dev = &port->dev;
-	struct usb_wwan_port_private *portdata =
+	struct huawei_voice_port_private *portdata =
 					usb_get_serial_port_data(port);
 
 	dev_dbg(dev, "%s: urb %p port %p has data %p\n", __func__, urb, port, portdata);
@@ -299,7 +318,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 	struct usb_serial *serial = port->serial;
 	struct usb_wwan_intf_private *intfdata = usb_get_serial_data(serial);
 	struct huawei_voice_private *priv = intfdata->private;
-	struct usb_wwan_port_private *portdata;
+	struct huawei_voice_port_private *portdata;
 	int val = 0;
 	int res;
 
@@ -326,7 +345,7 @@ static int huawei_voice_send_setup(struct usb_serial_port *port)
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count)
 {
-	struct usb_wwan_port_private *portdata;
+	struct huawei_voice_port_private *portdata;
 	struct usb_wwan_intf_private *intfdata;
 	struct huawei_voice_private *priv;
 	int i;
@@ -401,7 +420,7 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 
 	/* E150 require write zero length frame after each 320 bytes 20ms of voice data written. */
 	if (priv->bInterfaceNumber == 1) {
-
+		
 	}
 	
 	return count;
