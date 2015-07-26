@@ -60,7 +60,7 @@ static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 				      int dir, void *ctx, char *buf, int len,
 				      void (*callback) (struct urb *));
 static int huawei_voice_port_remove(struct usb_serial_port *port);
-static void huawei_voice_close(struct usb_serial_port *port)
+static void huawei_voice_close(struct usb_serial_port *port);
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
