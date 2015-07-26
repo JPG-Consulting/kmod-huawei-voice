@@ -214,7 +214,10 @@ static int huawei_voice_attach(struct usb_serial *serial)
 	const struct usb_device_id *id;
 	struct usb_wwan_intf_private *data;
 	struct huawei_voice_private *priv;
-
+	/* Added 2015-07-26 */
+	struct usb_serial_port *port;
+	struct huawei_voice_port_private *portdata;
+	
 	data = kzalloc(sizeof(struct usb_wwan_intf_private), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
@@ -241,6 +244,17 @@ static int huawei_voice_attach(struct usb_serial *serial)
 
 	usb_set_serial_data(serial, data);
 
+	/* Extra byte */
+	port = serial->port[0];
+	portdata = usb_get_serial_port_data(port);
+	portdata->out_urbs[4] = huawei_voice_setup_urb(serial,
+						       port->bulk_out_endpointAddress,
+					               USB_DIR_OUT,
+						       port,
+						       portdata->out_buffer[3],
+						       0,
+						       huawei_voice_outdat_callback);
+	
 	return 0;
 }
 
