@@ -60,6 +60,7 @@ static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 				      int dir, void *ctx, char *buf, int len,
 				      void (*callback) (struct urb *));
 static int huawei_voice_port_remove(struct usb_serial_port *port);
+static void huawei_voice_close(struct usb_serial_port *port)
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
@@ -104,7 +105,7 @@ static struct usb_serial_driver huawei_voice_1port_device = {
 	.num_ports         = 1,
 	.probe             = huawei_voice_probe,
 	.open              = usb_wwan_open,
-	.close             = usb_wwan_close,
+	.close             = huawei_voice_close,
 	.dtr_rts	       = usb_wwan_dtr_rts,
 	.write             = huawei_voice_write,
 	.write_room        = usb_wwan_write_room,
@@ -397,6 +398,45 @@ bail_out_error:
 	kfree(portdata);
 
 	return -ENOMEM;
+}
+
+static void huawei_voice_close(struct usb_serial_port *port)
+{
+	int i;
+	struct usb_serial *serial = port->serial;
+	struct huawei_voice_port_private *portdata;
+	struct usb_wwan_intf_private *intfdata = usb_get_serial_data(serial);
+	struct urb *urb;
+
+	portdata = usb_get_serial_port_data(port);
+
+	/*
+	 * Need to take susp_lock to make sure port is not already being
+	 * resumed, but no need to hold it due to ASYNC_INITIALIZED.
+	 */
+	spin_lock_irq(&intfdata->susp_lock);
+	if (--intfdata->open_ports == 0)
+		serial->interface->needs_remote_wakeup = 0;
+	spin_unlock_irq(&intfdata->susp_lock);
+
+	for (;;) {
+		urb = usb_get_from_anchor(&portdata->delayed);
+		if (!urb)
+			break;
+		unbusy_queued_urb(urb, portdata);
+		usb_autopm_put_interface_async(serial->interface);
+	}
+
+	for (i = 0; i < N_IN_URB; i++)
+		usb_kill_urb(portdata->in_urbs[i]);
+	for (i = 0; i < N_OUT_URB; i++)
+		usb_kill_urb(portdata->out_urbs[i]);
+		
+	usb_kill_urb(portdata->out_urbs[N_OUT_URB]);
+	
+	usb_kill_urb(port->interrupt_in_urb);
+
+	usb_autopm_get_interface_no_resume(serial->interface);
 }
 
 static int huawei_voice_attach(struct usb_serial *serial)
