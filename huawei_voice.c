@@ -291,7 +291,7 @@ static int huawei_voice_probe(struct usb_serial *serial,
 	if (dev_desc->idVendor == cpu_to_le16(HUAWEI_VENDOR_ID) &&
 	    dev_desc->idProduct == cpu_to_le16(HUAWEI_PRODUCT_E600) &&
 	    serial->interface->cur_altsetting->desc.bInterfaceNumber != 1)
-		return -ENODEV;	*/
+		return -ENODEV;
     
 	/* Store device id so we can use it during attach. */
 	usb_set_serial_data(serial, (void *)id);
