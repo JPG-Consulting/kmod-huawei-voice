@@ -670,6 +670,13 @@ static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *po
 	/* E150 require write zero length frame after each 320 bytes 20ms of voice data written. */
 	if (priv->bInterfaceNumber == 1) {
 		this_urb = portdata->out_urbs[N_OUT_URB];
+		if (test_and_set_bit(N_OUT_URB, &portdata->out_busy)) {
+			if (time_before(jiffies,
+					portdata->tx_start_time[N_OUT_URB] + 10 * HZ))
+				return count;
+			usb_unlink_urb(this_urb);
+			return count;
+		}
 		dev_dbg(&port->dev, "%s: endpoint %d buf %d\n", __func__,
 			usb_pipeendpoint(this_urb->pipe), i);
 
