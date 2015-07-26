@@ -59,6 +59,7 @@ static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 				      int endpoint,
 				      int dir, void *ctx, char *buf, int len,
 				      void (*callback) (struct urb *));
+static int huawei_voice_port_remove(struct usb_serial_port *port);
 
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
@@ -114,7 +115,7 @@ static struct usb_serial_driver huawei_voice_1port_device = {
 	.attach            = huawei_voice_attach,
 	.release           = huawei_voice_release,
 	.port_probe        = huawei_voice_port_probe,
-	.port_remove	   = usb_wwan_port_remove,
+	.port_remove	   = huawei_voice_port_remove,
 	.read_int_callback = huawei_voice_instat_callback,
 #ifdef CONFIG_PM
 	.suspend           = usb_wwan_suspend,
@@ -275,6 +276,31 @@ static int huawei_voice_probe(struct usb_serial *serial,
     
 	/* Store device id so we can use it during attach. */
 	usb_set_serial_data(serial, (void *)id);
+
+	return 0;
+}
+
+static int huawei_voice_port_remove(struct usb_serial_port *port)
+{
+	int i;
+	struct huawei_voice_port_private *portdata;
+
+	portdata = usb_get_serial_port_data(port);
+	usb_set_serial_port_data(port, NULL);
+
+	for (i = 0; i < N_IN_URB; i++) {
+		usb_free_urb(portdata->in_urbs[i]);
+		free_page((unsigned long)portdata->in_buffer[i]);
+	}
+	for (i = 0; i < N_OUT_URB; i++) {
+		usb_free_urb(portdata->out_urbs[i]);
+		kfree(portdata->out_buffer[i]);
+	}
+
+	usb_free_urb(portdata->out_urbs[N_OUT_URB]);
+	kfree(portdata->out_buffer[N_OUT_URB]);
+	
+	kfree(portdata);
 
 	return 0;
 }
