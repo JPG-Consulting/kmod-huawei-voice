@@ -61,7 +61,9 @@ static struct urb *huawei_voice_setup_urb(struct usb_serial_port *port,
 				      void (*callback) (struct urb *));
 static int huawei_voice_port_remove(struct usb_serial_port *port);
 static void huawei_voice_close(struct usb_serial_port *port);
-
+static void unbusy_queued_urb(struct urb *urb,
+					struct usb_wwan_port_private *portdata);
+					
 /* Vendor and product IDs */
 #define HUAWEI_VENDOR_ID			0x12D1
 #define HUAWEI_PRODUCT_E600			0x1001
@@ -133,6 +135,23 @@ struct huawei_voice_private {
 };
 
 module_usb_serial_driver(serial_drivers, huawei_voice_ids);
+
+static void unbusy_queued_urb(struct urb *urb,
+					struct usb_wwan_port_private *portdata)
+{
+	int i;
+
+	for (i = 0; i < N_OUT_URB; i++) {
+		if (urb == portdata->out_urbs[i]) {
+			clear_bit(i, &portdata->out_busy);
+			break;
+		}
+	}
+	
+	if (urb == portdata->out_urbs[N_OUT_URB]) {
+		clear_bit(N_OUT_URB, &portdata->out_busy);
+	}
+}
 
 /* struct usb_wwan_port_private { */
 struct huawei_voice_port_private {
