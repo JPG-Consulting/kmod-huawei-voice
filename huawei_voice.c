@@ -339,6 +339,20 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 						huawei_voice_outdat_callback);
 		portdata->out_urbs[i] = urb;
 	}
+	
+	/* Extra byte */
+	buffer = kmalloc(OUT_BUFLEN, GFP_KERNEL);
+	if (!buffer)
+		goto bail_out_error2;
+	portdata->out_buffer[N_OUT_URB] = buffer;
+
+	urb = huawei_voice_setup_urb(port, port->bulk_out_endpointAddress,
+					USB_DIR_OUT, port,
+					buffer, OUT_BUFLEN,
+					huawei_voice_outdat_callback);
+					
+	portdata->out_urbs[N_OUT_URB] = urb;
+	/* End Extra byte */
 
 	usb_set_serial_port_data(port, portdata);
 
