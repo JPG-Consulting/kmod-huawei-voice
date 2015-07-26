@@ -53,6 +53,7 @@ static void huawei_voice_instat_callback(struct urb *urb);
 static int huawei_voice_write(struct tty_struct *tty, struct usb_serial_port *port,
 		   const unsigned char *buf, int count);
 static int huawei_voice_port_probe(struct usb_serial_port *port);
+static void huawei_voice_indat_callback(struct urb *urb);
 static void huawei_voice_outdat_callback(struct urb *urb);
 
 /* Vendor and product IDs */
@@ -173,10 +174,48 @@ static bool is_blacklisted(const u8 ifnum, enum huawei_voice_blacklist_reason re
 	return false;
 }
 
+static void huawei_voice_indat_callback(struct urb *urb)
+{
+	int err;
+	int endpoint;
+	struct usb_serial_port *port;
+	struct device *dev;
+	unsigned char *data = urb->transfer_buffer;
+	int status = urb->status;
+
+	endpoint = usb_pipeendpoint(urb->pipe);
+	port = urb->context;
+	dev = &port->dev;
+
+	if (status) {
+		dev_dbg(dev, "%s: nonzero status: %d on endpoint %02x.\n",
+			__func__, status, endpoint);
+	} else {
+		if (urb->actual_length) {
+			tty_insert_flip_string(&port->port, data,
+					urb->actual_length);
+			tty_flip_buffer_push(&port->port);
+		} else
+			dev_dbg(dev, "%s: empty read urb received\n", __func__);
+	}
+	/* Resubmit urb so we continue receiving */
+	err = usb_submit_urb(urb, GFP_ATOMIC);
+	if (err) {
+		if (err != -EPERM) {
+			dev_err(dev, "%s: resubmit read urb failed. (%d)\n",
+				__func__, err);
+			/* busy also in error unless we are killed */
+			usb_mark_last_busy(port->serial->dev);
+		}
+	} else {
+		usb_mark_last_busy(port->serial->dev);
+	}
+}
+
 static void huawei_voice_outdat_callback(struct urb *urb)
 {
 	struct usb_serial_port *port;
-	struct huawei_voice_port_private *portdata;
+	struct usb_wwan_port_private *portdata;
 	struct usb_wwan_intf_private *intfdata;
 	int i;
 
@@ -261,7 +300,7 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 		urb = usb_wwan_setup_urb(port, port->bulk_in_endpointAddress,
 						USB_DIR_IN, port,
 						buffer, IN_BUFLEN,
-						usb_wwan_indat_callback);
+						huawei_voice_indat_callback);
 		portdata->in_urbs[i] = urb;
 	}
 
@@ -274,7 +313,7 @@ static int huawei_voice_port_probe(struct usb_serial_port *port)
 		urb = usb_wwan_setup_urb(port, port->bulk_out_endpointAddress,
 						USB_DIR_OUT, port,
 						buffer, OUT_BUFLEN,
-						usb_wwan_outdat_callback);
+						huawei_voice_outdat_callback);
 		portdata->out_urbs[i] = urb;
 	}
 
